@@ -1,0 +1,86 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_NeoPixel.h>
+
+#define LM75_ADDRESS 0x48               // Dirección I2C del LM75
+#define TEMPERATURE_REGISTER 0x00       // Registro de temperatura del LM75
+#define NEOPIXEL_PIN 4                  // Pin donde está conectado el NeoPixel
+#define NUMPIXELS 1                     // Número de LEDs en el módulo NeoPixel
+
+Adafruit_NeoPixel pixel(NUMPIXELS, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
+
+// Definir el UART2 en el ESP32 (usaremos pines GPIO para TX y RX)
+#define UART2_RX_PIN 16                 // Pin GPIO para RX del UART2 (conectado al TX del STM32 UART5)
+#define UART2_TX_PIN 17                 // Pin GPIO para TX del UART2 (conectado al RX del STM32 UART5)
+HardwareSerial mySerial(2);             // Crear el objeto Serial para UART2 (Serial2)
+
+// Variables para la comunicación UART
+const char requestTemperature = 'T';    // Comando que esperará el ESP32 para enviar la temperatura
+
+void setup() {
+    Wire.begin(21, 22);                 // Inicializa I2C en GPIO 21 y 22 del ESP32
+    Serial.begin(115200);               // Inicia comunicación serial para monitorear (UART0 - consola)
+    
+    // Inicializa UART2 para comunicación con el STM32
+    mySerial.begin(115200, SERIAL_8N1, UART2_RX_PIN, UART2_TX_PIN);
+
+    pixel.begin();                      // Inicializa el NeoPixel
+    pixel.show();                       // Apaga todos los LEDs del NeoPixel
+}
+
+float readTemperature() {
+  Wire.beginTransmission(LM75_ADDRESS);
+  Wire.write(TEMPERATURE_REGISTER);
+  Wire.endTransmission();
+  
+  Wire.requestFrom(LM75_ADDRESS, 2);
+  if (Wire.available() == 2) {
+    uint8_t msb = Wire.read();
+    uint8_t lsb = Wire.read();
+    
+    // Convierte los bytes en temperatura
+    int16_t tempRaw = ((msb << 8) | lsb) >> 7;
+    return tempRaw * 0.5;
+  }
+  return 0.0; // Devuelve 0.0 si no se pudo leer
+}
+
+void setPixelColor(uint8_t r, uint8_t g, uint8_t b) {
+    pixel.setPixelColor(0, pixel.Color(r, g, b));  // Configura el color del NeoPixel
+    pixel.show();
+}
+
+void loop() {
+    // Lee la temperatura
+    float temperature = readTemperature();  
+
+    if (!isnan(temperature)) {
+        Serial.print("Temperatura: ");
+        Serial.print(temperature);
+        Serial.println(" °C");
+    } else {
+        Serial.println("Error al leer el sensor.");
+    }
+
+    // Si la temperatura es mayor que 24°C, cambia el color a rojo
+    if (temperature > 20              ) {
+        setPixelColor(255, 0, 0);  // Cambia el NeoPixel a color rojo
+    } else {
+        setPixelColor(0, 255, 0);  // Cambia el NeoPixel a color verde
+    }
+    
+    // Comunicación UART: Esperar solicitud del STM32
+    if (mySerial.available() > 0) {
+         char request = mySerial.read(); // Lee la solicitud del STM32
+    
+        if (request == 'T') {         // Si se recibe 'T', envía la temperatura
+            float temperature = readTemperature();
+            char buffer[10];
+            snprintf(buffer, sizeof(buffer), "%.2f", temperature);
+            mySerial.println(buffer);    // Enviar temperatura como cadena
+        }
+    }
+
+    delay(1000); // Lee el sensor cada segundo
+}
+
